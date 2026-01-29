@@ -17,17 +17,58 @@ Hipparcos 카탈로그 기반 물리적으로 정확한 Star Tracker 이미지 �
 
 ## 빠른 시작
 
-### 1. 실행
+### 1. Git 설치 (처음 사용자)
+
+Git이 설치되어 있지 않다면 먼저 설치하세요:
+- **Windows**: https://git-scm.com/download/win 에서 다운로드 후 설치 (모두 기본값으로 Next)
+- **Mac**: 터미널에서 `git --version` 입력하면 자동 설치 안내
+
+설치 확인:
+```bash
+git --version
+# git version 2.xx.x 같은 출력이 나오면 성공
+```
+
+### 2. 저장소 다운로드 (Clone)
+
+원하는 폴더에서 **명령 프롬프트**(Windows) 또는 **터미널**(Mac)을 열고:
+
+```bash
+# 원하는 폴더로 이동 (예: D드라이브)
+cd D:\
+
+# 저장소 복제 (URL은 실제 저장소 주소로 변경)
+git clone https://github.com/YOUR_USERNAME/bayer_comparison.git
+
+# 폴더로 이동
+cd bayer_comparison
+```
+
+> **팁**: Windows에서 폴더 경로창에 `cmd` 입력하면 해당 위치에서 명령 프롬프트 열림
+
+### 3. MATLAB에서 실행
 
 ```matlab
 % MATLAB에서 이 폴더로 이동 후 실행
-cd('YOUR_PATH/bayer_comparison')
+cd('D:\bayer_comparison')   % 실제 다운받은 경로로 변경
 main_simulation
 ```
 
 모든 데이터 파일(별 카탈로그 등)은 `data/` 폴더에 포함되어 있어 별도 설정이 필요 없습니다.
 
-### 2. 결과
+### 4. 나중에 업데이트 받기
+
+프로젝트가 업데이트되면 최신 버전을 받을 수 있습니다:
+
+```bash
+# bayer_comparison 폴더에서
+cd D:\bayer_comparison
+
+# 최신 버전 다운로드
+git pull
+```
+
+### 5. 결과
 
 - Figure 1: 별 이미지 (이상적 Gray, 별 위치 표시, Bayer 패턴)
 - Figure 2: 등급 분포 히스토그램
