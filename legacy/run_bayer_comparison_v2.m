@@ -1,3 +1,33 @@
+% ============================================================
+% ⚠ 폐기된 파일 (DEPRECATED) - v2
+% ============================================================
+% 이 파일은 더 이상 사용되지 않습니다.
+%
+% [대체 파일]
+%   sub_main_1_bayer_comparison.m (최신 버전)
+%
+% [버전 이력]
+%   v1 (run_bayer_comparison.m):
+%     - 무작위 별 이미지 기반 (simulate_bayer_star_image 사용)
+%     - 물리 모델 없음, 재현성 부족
+%   v2 (이 파일):
+%     - Hipparcos 별 카탈로그 기반으로 개선 (simulate_star_image_realistic 사용)
+%     - 실제 별 등급/좌표 사용으로 물리적 정확도 향상
+%     - 외부 경로 하드코딩 여전히 존재
+%   최신 (sub_main_1_bayer_comparison.m):
+%     - v2의 로직을 리팩토링하여 독립 실행형으로 변환
+%     - 외부 경로 제거, data/ 폴더에 카탈로그 포함
+%     - main_simulation.m과 연계하여 동일 파라미터 사용 보장
+%
+% [v2에서 v_최신으로의 주요 변경]
+%   - 외부 addpath 제거 → data/ 폴더의 자체 카탈로그 사용
+%   - 관측 방향 변경 (RA=90°,DEC=20° → RA=84°,DEC=-1°, 오리온 벨트)
+%   - 센서 파라미터를 main_simulation.m과 공유
+%   - 출력 폴더에 결과 이미지 자동 저장
+%
+% [참고] 이 파일의 핵심 로직은 sub_main_1_bayer_comparison.m에 통합되었습니다.
+% ============================================================
+
 %% run_bayer_comparison_v2.m
 % Bayer → RGB → Gray vs Bayer → Gray 직접 변환 비교 시뮬레이션
 % 실제 별 카탈로그 기반 (star_simulator 방식)
@@ -8,6 +38,9 @@
 clear; close all; clc;
 
 %% 경로 설정
+% ※ 외부 경로 하드코딩 — 최신 버전에서는 제거됨
+%   이 경로들은 특정 PC에서만 동작하므로 이식성이 없음
+%   최신 코드는 data/ 폴더에 카탈로그를 포함하여 독립 실행 가능
 addpath(genpath('D:\star_tracker_test\main_pj_code'));
 addpath(genpath('D:\star_tracker_test\star_simulator_matlab'));
 
@@ -40,6 +73,10 @@ fprintf('  초점거리: %.2f mm\n', sensor_params.f * 1000);
 fprintf('\n');
 
 %% 1. 시뮬레이션 위치 설정 (별이 많은 영역)
+% --- 관측 방향 ---
+% v2에서는 RA=90°, DEC=20° (오리온 근처, 비교적 별이 많은 영역)
+% 최신 버전에서는 RA=84°, DEC=-1° (오리온 벨트, 삼태성)으로 변경
+%   → 밝은 별 3개가 집중되어 별센서 테스트에 더 적합
 % 은하수 근처 또는 별이 밀집한 영역 선택
 ra_deg = 90;    % Right Ascension [deg] - Orion 근처
 de_deg = 20;    % Declination [deg]
@@ -141,6 +178,10 @@ match_radius = 5.0;
 centroid_results = struct();
 centroid_results.fpga = evaluate_centroid_accuracy(detection_results.fpga, true_centroids, match_radius);
 centroid_results.raw = evaluate_centroid_accuracy(detection_results.raw, true_centroids, match_radius);
+% ★ 바이닝 해상도 스케일링:
+%   2×2 바이닝 출력은 원본의 절반 해상도 (1280×720 → 640×360)
+%   ground truth 좌표도 0.5배 스케일링 필요
+%   다른 방법은 원본 해상도 유지 → 스케일링 불필요
 centroid_results.binning = evaluate_centroid_accuracy(detection_results.binning, true_centroids * 0.5, match_radius);
 centroid_results.green = evaluate_centroid_accuracy(detection_results.green, true_centroids, match_radius);
 centroid_results.weighted = evaluate_centroid_accuracy(detection_results.weighted, true_centroids, match_radius);

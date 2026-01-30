@@ -16,6 +16,19 @@
 %
 % 저자: GAiMSat-1 Star Tracker 프로젝트
 % 날짜: 2026-01-30
+%
+% === [실험 구성] 5가지 변환 방식 비교 ===
+%   A.  FPGA:     Bayer → CFA → RGB → rgb2gray (현재 파이프라인, baseline)
+%   B1. RAW:      Bayer 값 그대로 grayscale로 사용 (변환 없음)
+%   B2. Binning:  2x2 RGGB 블록 평균 (해상도 1/2, SNR 향상)
+%   B3. Green:    Green 채널 추출 + R/B 위치 보간 (인간 시각 근사)
+%   B4. Weighted: Y=(R+2G+B)/4 직접 계산 (CFA+rgb2gray 통합)
+%
+% === [평가 지표] ===
+%   - Peak SNR [dB]: 가장 밝은 별의 신호 대 배경 노이즈 비율
+%   - 별 검출 수 [개]: threshold 기반 검출된 별 후보 수
+%   - Centroid RMS 오차 [pixel]: 검출 중심과 실제 좌표 간 거리의 RMS
+%   - 처리 시간 [ms]: 각 변환 방식의 MATLAB 실행 시간
 
 clear; close all; clc;
 
@@ -82,27 +95,32 @@ end
 fprintf('2. 변환 방식별 Grayscale 생성...\n');
 
 % 방법 A: FPGA 파이프라인 (CFA → RGB → Gray)
+% --- FPGA 파이프라인 재현: CFA 보간 → RGB → Y=(R+2G+B)/4 ---
 tic;
 rgb_img = bayer_to_rgb_cfa(bayer_img);
 gray_fpga = rgb_to_gray_fpga(rgb_img);
 time_fpga = toc;
 
 % 방법 B1: RAW 직접
+% --- 패스스루: Bayer RAW 값 = grayscale 직접 사용 (변환 비용 0) ---
 tic;
 [gray_raw, ~] = bayer_to_gray_direct(bayer_img, 'raw');
 time_raw = toc;
 
 % 방법 B2: 2x2 바이닝
+% --- 2x2 블록 평균 → 해상도 1/2, SNR sqrt(4)=2배 향상 ---
 tic;
 [gray_binning, info_binning] = bayer_to_gray_direct(bayer_img, 'binning');
 time_binning = toc;
 
 % 방법 B3: Green 채널
+% --- Green 50% 점유 + R/B 보간 → 인간 시각 근사 ---
 tic;
 [gray_green, ~] = bayer_to_gray_direct(bayer_img, 'green');
 time_green = toc;
 
 % 방법 B4: 가중 평균
+% --- 각 Bayer 위치에서 Y=(R+2G+B)/4 직접 계산 (CFA+rgb2gray 통합) ---
 tic;
 [gray_weighted, ~] = bayer_to_gray_direct(bayer_img, 'weighted');
 time_weighted = toc;
@@ -116,6 +134,9 @@ fprintf('   B4. 가중 평균: %.3f ms\n\n', time_weighted*1000);
 %% ========== 3. SNR 분석 ==========
 fprintf('3. Peak SNR 분석...\n');
 
+% Peak SNR: 가장 밝은 별의 신호 대 배경 노이즈 비율 [dB]
+% 높을수록 별이 배경에서 뚜렷하게 보임
+% 자세한 정의: calculate_peak_snr.m 참조
 snr_results = struct();
 snr_results.fpga = calculate_peak_snr(double(gray_fpga));
 snr_results.raw = calculate_peak_snr(double(gray_raw));
@@ -132,6 +153,17 @@ fprintf('   B4. Weighted: %.2f dB\n\n', snr_results.weighted);
 %% ========== 4. 별 검출 분석 ==========
 fprintf('4. 별 검출 성능...\n');
 
+% --- 별 검출 파라미터 ---
+% threshold = 15 [ADU]: 배경 + 15 이상을 별 후보로 판정
+%   근거: 센서 노이즈 sigma ≈ 3-5 ADU (읽기노이즈 3e- x 게인 16 ≈ 48 ADU RMS)
+%   → 실제로는 gain 적용 후 배경이 높아지므로 15는 보수적 설정
+%   → 너무 낮으면 노이즈를 별로 오인 (False Positive 증가)
+%   → 너무 높으면 어두운 별을 놓침 (False Negative 증가)
+%
+% min_area = 2 [pixel]: 최소 별 크기
+%   근거: PSF sigma=1.2 → FWHM ≈ 2.8 pixel → 별 면적 ≈ 5-15 pixel
+%   → 1 pixel 객체는 핫픽셀/노이즈일 가능성 높음
+%   → 2 pixel 이상이면 실제 별일 가능성이 높음
 threshold = 15;
 min_area = 2;
 
@@ -153,12 +185,29 @@ fprintf('   B4. Weighted: %d개\n\n', detection_results.weighted.n_detected);
 fprintf('5. Centroid 정확도...\n');
 
 true_centroids = star_info.true_centroids;
+
+% match_radius = 5.0 [pixel]: 매칭 판정 반경
+%   검출된 별과 실제 별의 거리가 이 값 미만이면 매칭 성공
+%   근거: PSF sigma=1.2 → 별의 에너지 분포는 ~4 pixel 반경 이내
+%   5 pixel은 충분한 마진을 포함한 매칭 범위
 match_radius = 5.0;
 
 centroid_results = struct();
 centroid_results.fpga = evaluate_centroid_accuracy(detection_results.fpga, true_centroids, match_radius);
 centroid_results.raw = evaluate_centroid_accuracy(detection_results.raw, true_centroids, match_radius);
+
+% ★★★ 바이닝 해상도 스케일링 (매우 중요!) ★★★
+% true_centroids * 0.5 설명:
+%   바이닝(binning)은 2x2 블록을 1 픽셀로 합산하므로 출력 해상도가 절반
+%   원본: 1280x720 → 바이닝: 640x360 [pixel]
+%   따라서 ground truth 좌표도 0.5배 스케일링 필요
+%
+%   예: 원본에서 별 위치 (400, 300) → 바이닝 이미지에서 (200, 150)
+%   이 스케일링을 하지 않으면 좌표 불일치로 매칭 실패 → RMS 오차 비정상
+%
+%   다른 방법(FPGA, RAW, Green, Weighted)은 원본과 동일 해상도 → 스케일링 불필요
 centroid_results.binning = evaluate_centroid_accuracy(detection_results.binning, true_centroids * 0.5, match_radius);
+
 centroid_results.green = evaluate_centroid_accuracy(detection_results.green, true_centroids, match_radius);
 centroid_results.weighted = evaluate_centroid_accuracy(detection_results.weighted, true_centroids, match_radius);
 
@@ -172,6 +221,7 @@ fprintf('   B4. Weighted: %.3f px RMS\n\n', centroid_results.weighted.rms_error)
 fprintf('6. 시각화...\n');
 
 % Figure 1: 원본 이미지
+% Figure 크기: 1400x500 → 3개 subplot을 나란히 배치하기에 적절한 가로 비율
 fig1 = figure('Position', [50 50 1400 500], 'Name', '원본 시뮬레이션', 'Color', 'k');
 
 subplot(1,3,1);
@@ -193,6 +243,7 @@ sgtitle(sprintf('Star Tracker (RA=%d°, DEC=%d°, FOV=%.1f°×%.1f°)', ...
     ra_deg, de_deg, FOVx, FOVy), 'FontSize', 14, 'Color', 'w');
 
 % Figure 2: 변환 방식 비교
+% Figure 크기: 1600x800 → 6개 subplot (2x3 grid) 배치용
 fig2 = figure('Position', [50 50 1600 800], 'Name', '변환 비교', 'Color', 'k');
 
 subplot(2,3,1);

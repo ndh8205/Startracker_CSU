@@ -1,3 +1,26 @@
+% ============================================================
+% ⚠ 폐기된 파일 (DEPRECATED) - v1
+% ============================================================
+% 이 파일은 더 이상 사용되지 않습니다.
+%
+% [대체 파일]
+%   sub_main_1_bayer_comparison.m (최신 버전)
+%
+% [버전 이력]
+%   v1 (이 파일): 무작위 별 이미지 기반 비교 (simulate_bayer_star_image 사용)
+%   v2 (run_bayer_comparison_v2.m): Hipparcos 카탈로그 기반으로 전환
+%   최신 (sub_main_1_bayer_comparison.m): 독립 실행형으로 리팩토링,
+%        main_simulation.m에서 생성한 데이터를 받아 비교 수행
+%
+% [v1의 한계]
+%   - 무작위 별 위치/밝기 → 재현성 부족 (매 실행마다 결과 다름)
+%   - 물리 모델 없음 (Pogson 공식, QE, 게인 미적용)
+%   - 외부 경로 하드코딩 (D:\star_tracker_test\main_pj_code)
+%   - 독립 실행 불가 (외부 함수 의존)
+%
+% [참고] 이 파일의 핵심 로직은 sub_main_1_bayer_comparison.m에 통합되었습니다.
+% ============================================================
+
 %% run_bayer_comparison.m
 % Bayer → RGB → Gray vs Bayer → Gray 직접 변환 비교 시뮬레이션
 %
@@ -18,6 +41,8 @@ clear; close all; clc;
 script_path = fileparts(mfilename('fullpath'));
 
 % main_pj_code 경로 추가 (필요한 함수들)
+% ※ 외부 경로 하드코딩 — 최신 버전에서는 제거됨
+%   최신 코드는 data/ 폴더에 카탈로그를 포함하여 독립 실행 가능
 main_pj_path = 'D:\star_tracker_test\main_pj_code';
 if exist(main_pj_path, 'dir')
     addpath(genpath(main_pj_path));
@@ -128,6 +153,9 @@ fprintf('   RMS 차이: %.3f\n\n', sqrt(mean(diff_fpga_raw(:).^2)));
 %% 4. 별 검출 성능 분석
 fprintf('4. 별 검출 성능 분석...\n');
 
+% threshold = 10 [ADU]: v1에서는 낮은 값 사용
+%   (최신 버전 sub_main_1_bayer_comparison.m에서는 threshold=15 사용)
+%   min_area = 2 [pixel]: 노이즈 필터링 최소 면적
 threshold = 10;  % 검출 임계값 (낮춤)
 min_area = 2;    % 최소 별 크기
 
@@ -158,6 +186,10 @@ true_centroids = [star_info.x, star_info.y];
 centroid_results = struct();
 centroid_results.fpga = evaluate_centroid_accuracy(detection_results.fpga, true_centroids, 5.0);
 centroid_results.raw = evaluate_centroid_accuracy(detection_results.raw, true_centroids, 5.0);
+% ★ 바이닝 해상도 스케일링:
+%   2×2 바이닝 출력은 원본의 절반 해상도 (1280×720 → 640×360)
+%   ground truth 좌표도 0.5배 스케일링 필요
+%   다른 방법은 원본 해상도 유지 → 스케일링 불필요
 centroid_results.binning = evaluate_centroid_accuracy(detection_results.binning, true_centroids * 0.5, 5.0);
 centroid_results.green = evaluate_centroid_accuracy(detection_results.green, true_centroids, 5.0);
 centroid_results.weighted = evaluate_centroid_accuracy(detection_results.weighted, true_centroids, 5.0);
