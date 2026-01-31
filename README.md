@@ -87,7 +87,12 @@ cd bayer_comparison
 ```matlab
 % MATLAB에서 이 폴더로 이동 후 실행
 cd('D:\bayer_comparison')   % 실제 다운받은 경로로 변경
+
+% 방법 1: 스크립트 실행 (이미지 생성 + Figure 출력)
 main_simulation
+
+% 방법 2: GUI 실행 (인터랙티브 파라미터 튜닝)
+gui_star_simulator
 ```
 
 모든 데이터 파일(별 카탈로그 등)은 `data/` 폴더에 포함되어 있어 별도 설정이 필요 없습니다.
@@ -118,11 +123,16 @@ git pull
 bayer_comparison/
 ├── README.md                   # 이 문서
 ├── main_simulation.m           # ★ 메인 실행 파일 (별 이미지 생성)
+├── gui_star_simulator.m        # ★ 인터랙티브 GUI (파라미터 튜닝)
 ├── sub_main_1_bayer_comparison.m  # 서브: Bayer→Gray 변환 비교
+├── sub_main_2_optimal_weights.m   # 서브: 최적 가중치 도출 연구
+│
+├── 250131_이미지파이프라인_비효율분석.md  # 분석: FPGA 파이프라인 비효율
+├── 250131_최적가중치연구.md               # 분석: Bayer→Gray 최적 가중치
 │
 ├── core/                       # 핵심 함수
 │   ├── simulate_star_image_realistic.m   # ★ 별 이미지 생성 (Hipparcos)
-│   ├── bayer_to_gray_direct.m            # 직접 변환 (4가지 방법)
+│   ├── bayer_to_gray_direct.m            # 직접 변환 (5가지 방법)
 │   ├── bayer_to_rgb_cfa.m                # CFA 디모자이킹
 │   └── rgb_to_gray_fpga.m                # RGB→Gray (FPGA 방식)
 │
@@ -161,13 +171,15 @@ bayer_comparison/
 │                    실행 계층 (Entry Points)                │
 │  main_simulation.m          sub_main_1_bayer_comparison.m │
 │  (별 이미지 생성)            (변환 방법 비교)              │
+│  gui_star_simulator.m       sub_main_2_optimal_weights.m  │
+│  (인터랙티브 GUI)           (최적 가중치 연구)             │
 └──────────────┬──────────────────────┬────────────────────┘
                │                      │
 ┌──────────────▼──────────────────────▼────────────────────┐
 │                    핵심 계층 (Core)                        │
 │  simulate_star_image_realistic.m  ← 물리 엔진             │
 │  bayer_to_rgb_cfa.m              ← CFA 디모자이킹          │
-│  bayer_to_gray_direct.m          ← 직접 변환 (4가지)       │
+│  bayer_to_gray_direct.m          ← 직접 변환 (5가지)       │
 │  rgb_to_gray_fpga.m              ← FPGA 그레이스케일       │
 └──────────────┬──────────────────────┬────────────────────┘
                │                      │
@@ -277,10 +289,11 @@ bayer_comparison/
 
 | 항목 | 내용 |
 |------|------|
-| **위치** | `core/simulate_star_image_realistic.m` (389줄) |
+| **위치** | `core/simulate_star_image_realistic.m` (~400줄) |
 | **역할** | Hipparcos 카탈로그 기반 별 이미지 생성 |
 | **입력** | `ra_deg`, `de_deg`, `roll_deg` (관측 방향), `sensor_params` (센서 설정) |
 | **출력** | `gray_img` (Grayscale uint8), `bayer_img` (Bayer uint8), `star_info` (메타데이터 struct) |
+| **비고** | `sensor_params.preloaded_catalog`로 사전 로드된 카탈로그 전달 가능 (GUI 성능 최적화) |
 
 **내부 함수**:
 
@@ -322,9 +335,9 @@ bayer_comparison/
    a. Pogson 공식으로 플럭스 계산
    b. 센서 모델 적용 (노출, QE, 게인)
    c. 2D Gaussian PSF 렌더링
-9. 노이즈 추가 (다크 전류 → 샷 노이즈 → 읽기 노이즈)
-10. Bayer 패턴 생성 (RGGB + 채널 감도)
-11. Bayer에도 동일 노이즈 모델 적용
+9. 노이즈 추가 (ADU→전자 역변환 → 다크 전류 합산 → Poisson 샷 노이즈 → 전자→ADU → 읽기 노이즈)
+10. Bayer 패턴 생성 (RGGB + 채널 감도, ideal_gray 기반)
+11. Bayer에도 동일 노이즈 모델 적용 (전자 도메인 Poisson)
 12. 8-bit ADC 클램핑
 ```
 
@@ -391,13 +404,13 @@ pos_idx = row_idx×2 + col_idx  (0, 1, 2, 3)
 
 FPGA에서는 나눗셈을 2비트 시프트(`>> 2`)로 구현하여 곱셈기 없이 처리 가능합니다.
 
-#### 4. `bayer_to_gray_direct.m` (직접 변환 4가지)
+#### 4. `bayer_to_gray_direct.m` (직접 변환 5가지)
 
 | 항목 | 내용 |
 |------|------|
-| **위치** | `core/bayer_to_gray_direct.m` (126줄) |
+| **위치** | `core/bayer_to_gray_direct.m` (~588줄) |
 | **역할** | CFA 디모자이킹 없이 Bayer에서 직접 Grayscale 생성 |
-| **입력** | `bayer_img` (H×W), `method` ('raw'/'binning'/'green'/'weighted') |
+| **입력** | `bayer_img` (H×W), `method` ('raw'/'binning'/'green'/'weighted'/'optimal'), `weights` (optional, [w_R, w_G, w_B]) |
 | **출력** | `gray_img`, `method_info` (메타데이터) |
 
 **방법별 알고리즘**:
@@ -408,6 +421,7 @@ FPGA에서는 나눗셈을 2비트 시프트(`>> 2`)로 구현하여 곱셈기 �
 | **Binning** | H/2 × W/2 | `Y = (R + Gr + Gb + B) / 4` | 덧셈 3회 + 시프트 |
 | **Green** | H×W | Green 픽셀: 자기 자신, 나머지: 4방향 보간 | 덧셈 3회 + 시프트 |
 | **Weighted** | H×W | 위치별 `(R + 2G + B) / 4` 변형 | bilinear 수준 |
+| **Optimal** | H×W | `Y = w_R×R + w_G×G + w_B×B` (SNR 최대화) | 시프트+덧셈 |
 
 **RAW 방법** (가장 단순):
 ```
@@ -442,6 +456,24 @@ R/B 위치는 주변 Green 픽셀 4개의 평균으로 보간:
 ```
 각 위치에서 주변 R, G, B 값을 추정하고 (R + 2G + B) / 4 적용.
 FPGA 방식과 동일한 가중치이나, CFA 디모자이킹 단계를 건너뜀.
+```
+
+**Optimal 방법** (2026-01-31 추가):
+```
+각 위치에서 주변 R, G, B 값을 추정하고,
+SNR 최대화 가중치를 적용:
+  Y = 0.4544×R + 0.3345×G + 0.2111×B
+
+도출 근거: Inverse Variance Weighting (w_i ∝ S_i / σ_i²)
+  - OV4689 분광 응답 + 흑체복사 스펙트럼 기반
+  - 우주 환경, 전 스펙트럼(3000K~25000K) 등급 가중 평균
+  - 6등급 별 기준 기존 FPGA 대비 SNR +10.6% 개선
+
+FPGA 정수 근사: Y = (8R + 5G + 3B) >> 4
+  → 곱셈기 불필요 (시프트+덧셈만)
+
+상세: 250131_최적가중치연구.md
+코드: sub_main_2_optimal_weights.m
 ```
 
 #### 5. `calculate_snr.m` (참조 기반 SNR)
@@ -957,8 +989,19 @@ total_flux = electrons * analog_gain * digital_gain;
 #### 전체 노이즈 모델
 
 ```
-최종 신호 = Poisson(signal + dark) + Gaussian(0, σ_read)
+물리적 신호 체인:
+  광자 → 전자 (Poisson) → 게인 증폭 → 읽기 노이즈 (Gaussian)
+
+수식:
+  electrons = signal_e + dark_e                 ← 전자 단위
+  noisy_e = Poisson(electrons)                  ← 샷 노이즈 (전자 단위)
+  ADU = noisy_e × gain                          ← 게인 증폭
+  최종 = ADU + Gaussian(0, σ_read × gain)       ← 읽기 노이즈 (ADU 단위)
 ```
+
+> **주의**: Poisson 노이즈는 반드시 **전자(electron) 단위**에서 적용해야 합니다.
+> ADU(게인 적용 후) 단위에서 적용하면 샷 노이즈가 √gain 만큼 과소평가됩니다.
+> (예: gain=16일 때 약 4배 과소평가)
 
 #### 8-1. 다크 전류 (Dark Current)
 
@@ -978,12 +1021,18 @@ dark_ADU = dark_electrons × analog_gain × digital_gain
 - 우주 환경 (-20°C): 지상 대비 약 1/100로 감소
 - 시뮬레이션에서는 0.1 e-/px/s로 설정 (일반적인 CMOS 수준)
 
-**코드 대응** (`simulate_star_image_realistic.m:259-263`):
+**코드 대응** (`simulate_star_image_realistic.m:411-415`):
 ```matlab
+% ADU → 전자 역변환 (게인 제거)
+total_gain = analog_gain * digital_gain;
+signal_electrons = gray_img / total_gain;
+
+% 다크 전류 (전자 단위로 추가)
 dark_electrons = sensor_params.dark_current_rate * exposure_time;
-dark_adu = dark_electrons * analog_gain * digital_gain;
-gray_noisy = gray_img + dark_adu;
+total_electrons = signal_electrons + dark_electrons;
 ```
+
+> 다크 전류는 전자 단위에서 신호에 합산된 후, 함께 Poisson 과정을 거칩니다.
 
 #### 8-2. 샷 노이즈 (Shot Noise / Photon Noise)
 
@@ -1001,12 +1050,19 @@ SNR = N / √N = √N  (더 밝을수록 SNR 높음)
 | 100 | √100 = 10 | 10 |
 | 1000 | √1000 ≈ 31.6 | 31.6 |
 
-**코드 대응** (`simulate_star_image_realistic.m:267`):
+**코드 대응** (`simulate_star_image_realistic.m:417-424`):
 ```matlab
-gray_noisy = poissrnd(max(0, gray_noisy));
+% 샷 노이즈 (Poisson) - 전자 단위에서 적용
+noisy_electrons = poissrnd(max(0, total_electrons));
+
+% 전자 → ADU (게인 재적용)
+gray_noisy = noisy_electrons * total_gain;
 ```
 
 `poissrnd(λ)`: 평균값 λ인 Poisson 분포에서 난수 생성. 이미지의 각 픽셀이 독립적인 Poisson 과정을 겪습니다.
+
+> Poisson 노이즈의 분산은 평균과 같으므로 (`σ² = λ`), 전자 1.06개인 신호의
+> 샷 노이즈는 √1.06 ≈ 1.03 e⁻. 이것이 게인(×16)으로 증폭되어 ADU에서는 ~16.5 ADU의 노이즈가 됩니다.
 
 #### 8-3. 읽기 노이즈 (Read Noise)
 
@@ -1023,27 +1079,33 @@ gray_noisy = poissrnd(max(0, gray_noisy));
 
 분포: 정규 분포 N(0, σ_read_ADU)
 
-**코드 대응** (`simulate_star_image_realistic.m:271-272`):
+**코드 대응** (`simulate_star_image_realistic.m:426-428`):
 ```matlab
-read_noise_adu = sensor_params.read_noise * analog_gain * digital_gain;
+% 읽기 노이즈 (Gaussian) - ADU 단위
+read_noise_adu = sensor_params.read_noise * total_gain;
 gray_noisy = gray_noisy + read_noise_adu * randn(size(gray_noisy));
 ```
 
 #### 노이즈 예산 (Noise Budget)
 
 ```
-전체 노이즈 = √(σ²_shot + σ²_dark + σ²_read)
+전체 노이즈 (ADU) = √(σ²_shot_ADU + σ²_dark_ADU + σ²_read_ADU)
 
-6등급 별 (피크 ~17 ADU):
-  σ_shot = √17 ≈ 4.1 ADU
-  σ_dark ≈ 0.035 ADU (무시 가능)
-  σ_read = 48 ADU
+6등급 별 (피크 ~17 ADU, gain=16):
+  signal_electrons = 17 / 16 ≈ 1.06 e⁻
+
+  σ_shot = √1.06 e⁻ → ×16 = 16.4 ADU   ← 전자 노이즈가 게인으로 증폭됨
+  σ_dark ≈ √0.002 × 16 ≈ 0.7 ADU (무시 가능)
+  σ_read = 3 e⁻ × 16 = 48 ADU
   ───────────────────
-  σ_total = √(16.9 + 0.001 + 2304) ≈ 48.2 ADU
+  σ_total = √(269 + 0.5 + 2304) ≈ 50.7 ADU
 
-→ 읽기 노이즈가 지배적 (게인 16x에서)
-→ 게인을 낮추면 읽기 노이즈↓, 하지만 신호도↓
+→ 읽기 노이즈가 지배적이나, 샷 노이즈도 무시 못함
+→ 기존 ADU 기반 Poisson 적용 시: σ_shot = √17 ≈ 4.1 ADU (4배 과소평가!)
 ```
+
+> **수정 이력**: 기존 코드에서 `poissrnd(ADU)` → `poissrnd(electrons)`로 수정됨.
+> ADU 기반 적용 시 샷 노이즈가 √gain 배 과소평가되는 버그가 있었음.
 
 ### 9. Bayer 패턴과 Color Filter Array
 
@@ -1239,6 +1301,26 @@ CFA 디모자이킹과 유사하지만, RGB를 각각 출력하지 않고
 - CFA + RGB2Gray를 하나의 연산으로 통합
 - 중간 RGB 이미지 불필요 → 메모리/대역폭 절감
 
+#### 방법 B5: 최적 가중 평균 (Optimal)
+
+```
+각 위치에서 주변 R, G, B를 추정한 후:
+Y = 0.4544×R + 0.3345×G + 0.2111×B
+
+Inverse Variance Weighting (w_i ∝ S_i / σ_i²) 기반:
+  - OV4689 분광 응답 특성 반영
+  - 흑체복사 스펙트럼 (3,000K~25,000K) 기반 채널별 신호량 계산
+  - Read noise 지배 영역(어두운 별)에서 효과 최대
+
+FPGA 정수 근사: Y = (8R + 5G + 3B) >> 4
+```
+
+논거:
+- 기존 FPGA `(R+2G+B)/4`는 인간 시각 기반 → 별 추적에 비최적
+- R 채널이 가장 많은 광자를 수집 (넓은 응답 + 별빛 R 우세)
+- 6등급 어두운 별에서 SNR +10.6% 개선
+- 곱셈기 불필요, DSP 0개 추가
+
 ### 12. SNR 이론 (Signal-to-Noise Ratio)
 
 #### 참조 기반 SNR (`calculate_snr.m`)
@@ -1413,6 +1495,23 @@ Liebe (2002)에 따르면, Centroid 오차의 이론적 하한은:
 - 센서 파라미터 (해상도, 픽셀 크기, FOV)
 - 노이즈 모델 (샷 노이즈, 읽기 노이즈, 다크 전류)
 
+### GUI: 인터랙티브 시뮬레이터 (`gui_star_simulator.m`)
+
+MATLAB `uifigure` 기반 인터랙티브 GUI:
+- **5개 탭**: Sensor / Exposure / Noise / Observation / Processing
+- **이미지 비교**: 이상적(노이즈 없는) Grayscale vs 변환된 Grayscale 나란히 표시
+- **실시간 메트릭**: FOV, 별 수, SNR, 검출 수, Centroid RMS, 처리 시간
+- **3단계 캐싱**: Stage1(시뮬) → Stage2(변환) → Stage3(검출), dirty flag 기반 필요 단계만 재실행
+- **프리셋**: Orion Belt, Polaris, Big Dipper 등 관측 프리셋 / Space, Ground 등 씬 프리셋
+- **카탈로그 사전 로드**: 477MB 카탈로그를 GUI 시작 시 한번만 로드
+
+> **버그 수정 이력 (2026-01-31)**:
+> - Ideal 이미지에 `star_info.ideal_gray` (노이즈 없는 PSF 렌더링) 사용하도록 수정.
+>   기존에는 `simulate_star_image_realistic()`의 첫 번째 반환값(노이즈 포함)을 사용해
+>   Ideal과 변환 결과가 동일하게 노이즈가 포함되는 문제가 있었음.
+> - 노이즈 모델 수정: Poisson 노이즈를 ADU가 아닌 전자(electron) 단위에서 적용하도록 변경.
+>   기존 코드는 `poissrnd(ADU)`로 샷 노이즈를 √gain 배 과소평가하고 있었음.
+
 ### 서브: Bayer→Gray 변환 비교 (`sub_main_1_bayer_comparison.m`)
 
 FPGA 파이프라인 vs 직접 변환 성능 비교:
@@ -1424,8 +1523,16 @@ FPGA 파이프라인 vs 직접 변환 성능 비교:
 | **B2. Binning** | 2x2 평균 | 해상도↓, SNR↑ |
 | **B3. Green** | G 채널만 사용 | 50% 데이터 사용 |
 | **B4. Weighted** | R+2G+B/4 | 중간 복잡도 |
+| **B5. Optimal** | 0.454R+0.335G+0.211B | SNR 최대화 |
 
 **핵심 결론**: RAW 직접 변환이 FPGA 방식과 동등한 성능을 제공하며, CFA + RGB2Gray IP 제거로 FPGA 리소스/전력 절감 가능.
+
+### 서브: 최적 가중치 연구 (`sub_main_2_optimal_weights.m`)
+
+Inverse Variance Weighting 기반 Bayer→Gray 최적 가중치 도출:
+- **결과**: R=0.4544, G=0.3345, B=0.2111 (6등급 별 기준 기존 FPGA 대비 SNR +10.6%)
+- **FPGA 구현**: `(8R + 5G + 3B) >> 4` (곱셈기 불필요)
+- **상세 문서**: `250131_최적가중치연구.md`
 
 ---
 

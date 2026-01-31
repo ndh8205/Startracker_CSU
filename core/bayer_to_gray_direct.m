@@ -108,9 +108,10 @@ end
 % inverse variance weighting을 적용하여 SNR을 최대화하는 가중치입니다.
 % 도출 과정: Section 7 (전체 카탈로그 등급 가중 평균)
 if nargin < 3
-    % 기본값: 균등 가중치 (sub_main_2 실행 후 최적값으로 교체 예정)
-    % 실행 결과에 따라 이 값이 업데이트됩니다.
-    weights = [1/3, 1/3, 1/3];  % [w_R, w_G, w_B], 합 = 1
+    % sub_main_2_optimal_weights.m 실행 결과 (2026-01-31 도출)
+    % 우주 환경, 전 스펙트럼 등급 가중 평균 (G2형 기준)
+    % Inverse Variance Weighting: w_i ∝ S_i / σ_i²
+    weights = [0.4544, 0.3345, 0.2111];  % [w_R, w_G, w_B], 합 = 1
 end
 
 % === 전처리: double 형변환 ===

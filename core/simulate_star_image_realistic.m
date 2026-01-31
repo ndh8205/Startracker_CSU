@@ -152,7 +152,14 @@ data_dir = fullfile(base_dir, 'data');
 catalog_path = fullfile(data_dir, 'star_catalog_kvector.mat');
 csv_path = fullfile(data_dir, 'Hipparcos_Below_6.0.csv');
 
-if exist(catalog_path, 'file')
+if isfield(sensor_params, 'preloaded_catalog') && ~isempty(sensor_params.preloaded_catalog)
+    % GUI에서 사전 로드된 카탈로그 사용 (477MB 반복 로드 방지)
+    catalog_data = sensor_params.preloaded_catalog;
+
+    ra_stars = catalog_data.star_catalog.RA;
+    de_stars = catalog_data.star_catalog.DEC;
+    magnitudes = catalog_data.star_catalog.Magnitude;
+elseif exist(catalog_path, 'file')
     data = load(catalog_path);
     catalog_data = data.catalog_data;
 
@@ -395,24 +402,32 @@ star_info.ideal_gray = gray_img;
 if sensor_params.add_noise
     % === 노이즈 모델 (센서 파라미터 기반) ===
     %
-    % 1. 다크 전류 (Dark Current)
-    %    dark_electrons = dark_current_rate [e-/pixel/sec] * exposure_time [sec]
+    % 실제 센서 물리:
+    %   광자 → 전자 (Poisson) → 게인 증폭 → 읽기 노이즈 (Gaussian)
+    %   Poisson 노이즈는 전자 단위에서 발생 (게인 적용 전)
+    %   읽기 노이즈는 ADU 단위에서 발생 (게인 적용 후)
+    %
+    % 1. ADU → 전자 역변환 (게인 제거)
+    total_gain = analog_gain * digital_gain;
+    signal_electrons = gray_img / total_gain;
+
+    % 2. 다크 전류 (전자 단위)
     dark_electrons = sensor_params.dark_current_rate * exposure_time;
-    dark_adu = dark_electrons * analog_gain * digital_gain;
 
-    % 신호 + 다크 전류
-    gray_noisy = gray_img + dark_adu;
+    % 3. 샷 노이즈 (Poisson) - 전자 단위에서 적용
+    %    variance = mean (Poisson 특성)
+    %    std = sqrt(signal + dark) [e-]
+    total_electrons = signal_electrons + dark_electrons;
+    noisy_electrons = poissrnd(max(0, total_electrons));
 
-    % 2. 샷 노이즈 (Shot Noise) - Poisson 분포
-    %    신호에 비례하는 노이즈 (sqrt(signal))
-    gray_noisy = poissrnd(max(0, gray_noisy));
+    % 4. 전자 → ADU (게인 재적용)
+    gray_noisy = noisy_electrons * total_gain;
 
-    % 3. 읽기 노이즈 (Read Noise) - Gaussian 분포
-    %    게인 적용 후 ADU 단위
-    read_noise_adu = sensor_params.read_noise * analog_gain * digital_gain;
+    % 5. 읽기 노이즈 (Gaussian) - ADU 단위
+    read_noise_adu = sensor_params.read_noise * total_gain;
     gray_noisy = gray_noisy + read_noise_adu * randn(size(gray_noisy));
 
-    % 4. ADC 클램핑 (8-bit: 0~255)
+    % 6. ADC 클램핑 (8-bit: 0~255)
     gray_noisy = max(0, min(255, gray_noisy));
     gray_img = uint8(round(gray_noisy));
 else
@@ -472,13 +487,19 @@ end
 
 % Add noise (동일한 노이즈 모델 적용)
 if sensor_params.add_noise
-    % 다크 전류
-    bayer_img = bayer_img + dark_adu;
+    % ADU → 전자 (게인 제거)
+    bayer_electrons = bayer_img / total_gain;
 
-    % 샷 노이즈 (Poisson)
-    bayer_img = poissrnd(max(0, bayer_img));
+    % 다크 전류 (전자 단위)
+    bayer_electrons = bayer_electrons + dark_electrons;
 
-    % 읽기 노이즈 (Gaussian)
+    % 샷 노이즈 (Poisson, 전자 단위)
+    bayer_electrons = poissrnd(max(0, bayer_electrons));
+
+    % 전자 → ADU (게인 재적용)
+    bayer_img = bayer_electrons * total_gain;
+
+    % 읽기 노이즈 (Gaussian, ADU 단위)
     bayer_img = bayer_img + read_noise_adu * randn(size(bayer_img));
 end
 
